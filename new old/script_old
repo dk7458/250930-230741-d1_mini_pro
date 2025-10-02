@@ -1,0 +1,527 @@
+    <script>
+        // Global state
+        let uploadInProgress = false;
+        let currentTab = 'activity';
+        let progressInterval = null;
+
+        // Logging system
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            const icon = getLogIcon(type);
+            const logLine = document.createElement('div');
+            logLine.className = 'log-line';
+            logLine.innerHTML = `${icon} [${timestamp}] ${message}`;
+            logDiv.appendChild(logLine);
+            logDiv.scrollTop = logDiv.scrollHeight;
+            
+            // Also update system log for important events
+            if (type === 'error' || type === 'success') {
+                updateSystemLog(`${icon} ${message}`);
+            }
+        }
+
+        function getLogIcon(type) {
+            switch(type) {
+                case 'error': return '❌';
+                case 'success': return '✅';
+                case 'warning': return '⚠️';
+                default: return 'ℹ️';
+            }
+        }
+
+        function updateSystemLog(message) {
+            const systemLog = document.getElementById('systemlog');
+            const logLine = document.createElement('div');
+            logLine.className = 'log-line';
+            logLine.textContent = message;
+            systemLog.appendChild(logLine);
+            systemLog.scrollTop = systemLog.scrollHeight;
+        }
+
+        function clearLogs() {
+            document.getElementById('log').innerHTML = '<div class="log-line">Log cleared</div>';
+            document.getElementById('i2clog').innerHTML = '<div class="log-line">I2C log cleared</div>';
+            log('Logs cleared by user');
+        }
+
+        // Tab management
+        function switchTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+            document.querySelector(`.tab[onclick="switchTab('${tabName}')"]`).classList.add('active');
+            currentTab = tabName;
+        }
+
+        // EEPROM Detection
+        async function detectEEPROM() {
+            log('Detecting EEPROM...');
+            try {
+                const response = await fetch('/detect');
+                const data = await response.json();
+                
+                const statusDiv = document.getElementById('eepromStatus');
+                if (data.success) {
+                    statusDiv.innerHTML = '<span class="connection-status connected"></span> EEPROM detected successfully!';
+                    statusDiv.className = 'status success';
+                    log('EEPROM detected at address 0x50', 'success');
+                } else {
+                    statusDiv.innerHTML = '<span class="connection-status disconnected"></span> EEPROM not detected - check connections';
+                    statusDiv.className = 'status error';
+                    log('EEPROM detection failed: ' + data.message, 'error');
+                }
+            } catch (error) {
+                log('EEPROM detection error: ' + error.message, 'error');
+            }
+        }
+
+        // EEPROM Erase
+        async function eraseEEPROM() {
+            if (!confirm('⚠️ ERASE ENTIRE EEPROM?\n\nThis will wipe ALL data and cannot be undone!')) {
+                return;
+            }
+            
+            log('Starting EEPROM erase...', 'warning');
+            try {
+                const response = await fetch('/erase', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    log('EEPROM erased successfully', 'success');
+                } else {
+                    log('EEPROM erase failed: ' + data.message, 'error');
+                }
+            } catch (error) {
+                log('Erase error: ' + error.message, 'error');
+            }
+        }
+
+        // File handling
+<!-- Update the file upload section -->
+<div class="card">
+    <h2><i class="fas fa-upload"></i> File Upload & Programming</h2>
+    <p>Select HEX or BIN file to program to EEPROM:</p>
+    
+    <div class="file-input">
+        <input type="file" id="hexFile" accept=".hex,.bin,.txt,.rom">
+        <div style="margin-top: 10px; font-size: 12px; color: #666;">
+            <i class="fas fa-info-circle"></i> Supports: HEX (.hex, .txt), Binary (.bin, .rom), C Arrays
+        </div>
+    </div>
+    
+    <button class="btn" id="uploadBtn" onclick="uploadHexStream()" disabled>
+        <i class="fas fa-rocket"></i> Upload & Program
+    </button>
+    
+    <div class="progress-container">
+        <div id="uploadProgress" class="progress-bar">0%</div>
+    </div>
+    
+    <div id="uploadStatus" class="status info">
+        Select HEX or BIN file to begin programming
+    </div>
+</div>
+
+<!-- Update JavaScript file validation -->
+document.getElementById('hexFile').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    const uploadBtn = document.getElementById('uploadBtn');
+    const statusDiv = document.getElementById('uploadStatus');
+    
+    if (file) {
+        // Validate file type
+        const fileName = file.name.toLowerCase();
+        const validExtensions = ['.hex', '.txt', '.bin', '.rom'];
+        const isValid = validExtensions.some(ext => fileName.endsWith(ext));
+        
+        if (!isValid) {
+            statusDiv.innerHTML = '<div class="error">❌ Please select .hex, .bin, or .rom file</div>';
+            this.value = '';
+            uploadBtn.disabled = true;
+            return;
+        }
+        
+        uploadBtn.disabled = false;
+        statusDiv.innerHTML = `<div class="success">✅ File ready: ${file.name} (${formatFileSize(file.size)})</div>`;
+        log(`File selected: ${file.name} (${formatFileSize(file.size)})`);
+    } else {
+        uploadBtn.disabled = true;
+        statusDiv.innerHTML = '<div class="info">Select HEX or BIN file to begin programming</div>';
+    }
+});
+
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' bytes';
+            else if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            else return (bytes / 1048576).toFixed(1) + ' MB';
+        }
+
+        // Upload with progress tracking
+        async function uploadHexStream() {
+            const fileInput = document.getElementById('hexFile');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                log('No file selected', 'error');
+                return;
+            }
+            
+            if (uploadInProgress) {
+                log('Upload already in progress', 'warning');
+                return;
+            }
+            
+            uploadInProgress = true;
+            const uploadBtn = document.getElementById('uploadBtn');
+            const progressBar = document.getElementById('uploadProgress');
+            const statusDiv = document.getElementById('uploadStatus');
+            
+            try {
+                uploadBtn.disabled = true;
+                uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
+                statusDiv.innerHTML = '<div class="info">🔄 Starting upload...</div>';
+                progressBar.style.width = '0%';
+                progressBar.textContent = '0%';
+                
+                log(`Starting upload: ${file.name} (${formatFileSize(file.size)})`);
+                
+                // Read file as ArrayBuffer for reliable transfer
+                const fileBuffer = await readFileAsArrayBuffer(file);
+                log(`File loaded: ${fileBuffer.byteLength} bytes`);
+                
+                // Start progress polling
+                startProgressPolling();
+                
+                // Upload using FormData
+                const formData = new FormData();
+                formData.append('file', new Blob([fileBuffer]), file.name);
+                
+                const xhr = new XMLHttpRequest();
+                
+                // Track upload progress (client -> server)
+                xhr.upload.onprogress = (e) => {
+                    if (e.lengthComputable) {
+                        const percent = Math.round((e.loaded / e.total) * 100);
+                        log(`Upload transfer: ${percent}% (${e.loaded}/${e.total} bytes)`);
+                    }
+                };
+                
+                xhr.onload = () => {
+                    clearInterval(progressInterval);
+                    uploadInProgress = false;
+                    uploadBtn.disabled = false;
+                    uploadBtn.innerHTML = '<i class="fas fa-rocket"></i> Upload & Program';
+                    
+                    if (xhr.status === 200) {
+                        try {
+                            const data = JSON.parse(xhr.responseText);
+                            handleUploadResponse(data);
+                        } catch (e) {
+                            log('Failed to parse server response', 'error');
+                        }
+                    } else {
+                        log(`Upload failed: HTTP ${xhr.status}`, 'error');
+                    }
+                };
+                
+                xhr.onerror = () => {
+                    clearInterval(progressInterval);
+                    uploadInProgress = false;
+                    uploadBtn.disabled = false;
+                    uploadBtn.innerHTML = '<i class="fas fa-rocket"></i> Upload & Program';
+                    log('Upload network error', 'error');
+                };
+                
+                xhr.open('POST', `/upload_stream?size=${file.size}`);
+                xhr.send(formData);
+                
+            } catch (error) {
+                uploadInProgress = false;
+                uploadBtn.disabled = false;
+                uploadBtn.innerHTML = '<i class="fas fa-rocket"></i> Upload & Program';
+                statusDiv.innerHTML = `<div class="error">❌ Upload error: ${error.message}</div>`;
+                log(`Upload error: ${error.message}`, 'error');
+            }
+        }
+
+        function readFileAsArrayBuffer(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = (e) => reject(new Error('File read failed'));
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        function startProgressPolling() {
+            progressInterval = setInterval(async () => {
+                try {
+                    const response = await fetch('/progress');
+                    const progress = await response.json();
+                    
+                    const bytesWritten = progress.bytesWritten || 0;
+                    const bytesTotal = progress.bytesTotal || 1;
+                    const percent = Math.min(100, Math.round((bytesWritten / bytesTotal) * 100));
+                    
+                    const progressBar = document.getElementById('uploadProgress');
+                    progressBar.style.width = percent + '%';
+                    progressBar.textContent = percent + '%';
+                    
+                    // Update status every 10% or when complete
+                    if (percent % 10 === 0 || percent === 100) {
+                        log(`EEPROM programming: ${bytesWritten}/${bytesTotal} bytes (${percent}%)`);
+                    }
+                    
+                } catch (error) {
+                    console.error('Progress poll failed:', error);
+                }
+            }, 1000);
+        }
+
+        function handleUploadResponse(data) {
+            const statusDiv = document.getElementById('uploadStatus');
+            const progressBar = document.getElementById('uploadProgress');
+            
+            if (data.success) {
+                progressBar.style.width = '100%';
+                progressBar.textContent = '100%';
+                statusDiv.innerHTML = '<div class="success">✅ Programming completed successfully!</div>';
+                log(`Programming finished: ${data.bytesWritten} bytes written to EEPROM`, 'success');
+            } else {
+                statusDiv.innerHTML = `<div class="error">❌ Programming failed: ${data.message}</div>`;
+                log(`Programming failed: ${data.message}`, 'error');
+            }
+        }
+
+        // Control functions
+        async function toggleWP(enable) {
+            try {
+                const response = await fetch('/wp', { 
+                    method: 'POST', 
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ enable }) 
+                });
+                const data = await response.json();
+                if (data.success) {
+                    log(`Write Protect ${enable ? 'enabled' : 'disabled'}`, 'success');
+                } else {
+                    log('Write Protect change failed', 'error');
+                }
+            } catch (err) {
+                log('WP request error: ' + err.message, 'error');
+            }
+        }
+
+        async function setDspRun(run) {
+            try {
+                const response = await fetch('/dsp_run', { 
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ run }) 
+                });
+                const data = await response.json();
+                if (data.success) {
+                    log(`DSP ${run ? 'started' : 'stopped'}`, 'success');
+                } else {
+                    log('DSP control failed', 'error');
+                }
+            } catch (err) {
+                log('DSP control error: ' + err.message, 'error');
+            }
+        }
+
+        async function toggleVerification(enabled) {
+            try {
+                const response = await fetch('/verification', { 
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ enabled }) 
+                });
+                const data = await response.json();
+                if (data.success) {
+                    document.getElementById('verifyStatus').textContent = enabled ? 'Enabled' : 'Disabled';
+                    log(`Verification ${enabled ? 'enabled' : 'disabled'}`, 'success');
+                }
+            } catch (err) {
+                log('Verification toggle error: ' + err.message, 'error');
+            }
+        }
+
+        // Verification tools
+        async function verifyEEPROM() {
+            log('Starting EEPROM verification...');
+            try {
+                const response = await fetch('/verify');
+                const data = await response.json();
+                if (data.success) {
+                    log('EEPROM verification passed', 'success');
+                } else {
+                    log('EEPROM verification failed', 'error');
+                }
+            } catch (error) {
+                log('Verification error: ' + error.message, 'error');
+            }
+        }
+
+        async function readEEPROM() {
+            log('Reading first 256 bytes from EEPROM...');
+            try {
+                const response = await fetch('/read');
+                const data = await response.json();
+                if (data.success) {
+                    log('EEPROM read successful - check logs for data');
+                    console.log('EEPROM Data:', data.data);
+                }
+            } catch (error) {
+                log('Read error: ' + error.message, 'error');
+            }
+        }
+
+        async function dumpEEPROM() {
+            log('Downloading EEPROM dump...');
+            try {
+                const response = await fetch('/dump');
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'eeprom_dump.bin';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                log('EEPROM dump downloaded', 'success');
+            } catch (error) {
+                log('Dump error: ' + error.message, 'error');
+            }
+        }
+
+        async function doI2CScan() {
+            log('Scanning I2C bus...');
+            try {
+                const response = await fetch('/i2c_scan');
+                const data = await response.json();
+                log(`I2C devices found: ${data.found}`);
+            } catch (err) {
+                log('I2C scan failed: ' + err.message, 'error');
+            }
+        }
+
+        function openTestWriteDialog() {
+            const addr = prompt('Enter EEPROM address (0-32767):', '0');
+            if (addr === null) return;
+            const val = prompt('Enter value to write (0-255):', '170'); // 0xAA
+            if (val === null) return;
+            testWrite(parseInt(addr), parseInt(val));
+        }
+
+        async function testWrite(address, value) {
+            log(`Test write: address=${address} value=${value} (0x${value.toString(16)})`);
+            try {
+                const response = await fetch('/test_write', { 
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ address, value }) 
+                });
+                const data = await response.json();
+                if (data.success) {
+                    log(`Test write successful: 0x${data.value.toString(16)} at ${data.address}`, 'success');
+                } else {
+                    log('Test write failed', 'error');
+                }
+            } catch (err) {
+                log('Test write error: ' + err.message, 'error');
+            }
+        }
+
+        // System monitoring
+        async function updateSystemInfo() {
+            try {
+                const response = await fetch('/heap');
+                const data = await response.json();
+                document.getElementById('freeMemory').textContent = data.free_heap + ' bytes';
+            } catch (error) {
+                console.error('Failed to update system info:', error);
+            }
+        }
+
+        // I2C log polling
+        async function pollI2CLog() {
+            try {
+                const response = await fetch('/i2c_log');
+                const data = await response.json();
+                if (data.log) {
+                    const i2cLog = document.getElementById('i2clog');
+                    i2cLog.innerHTML = '';
+                    data.log.split('\n').forEach(line => {
+                        if (line.trim()) {
+                            const logLine = document.createElement('div');
+                            logLine.className = 'log-line';
+                            logLine.textContent = line;
+                            i2cLog.appendChild(logLine);
+                        }
+                    });
+                    i2cLog.scrollTop = i2cLog.scrollHeight;
+                }
+            } catch (err) {
+                // Ignore polling errors
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            log('EEPROM Programmer initialized', 'success');
+            updateSystemInfo();
+            setInterval(updateSystemInfo, 10000); // Update every 10 seconds
+            setInterval(pollI2CLog, 2000); // Poll I2C log every 2 seconds
+        });
+
+    // File input event listener - FIXED VERSION
+document.addEventListener('DOMContentLoaded', function() {
+    const fileInput = document.getElementById('hexFile');
+    if (fileInput) {
+        fileInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            const uploadBtn = document.getElementById('uploadBtn');
+            const statusDiv = document.getElementById('uploadStatus');
+            
+            if (file) {
+                // Validate file type
+                const fileName = file.name.toLowerCase();
+                const validExtensions = ['.hex', '.txt', '.bin', '.rom'];
+                const isValid = validExtensions.some(ext => fileName.endsWith(ext));
+                
+                if (!isValid) {
+                    statusDiv.innerHTML = '<div class="error">❌ Please select .hex, .bin, or .rom file</div>';
+                    this.value = '';
+                    uploadBtn.disabled = true;
+                    return;
+                }
+                
+                uploadBtn.disabled = false;
+                statusDiv.innerHTML = `<div class="success">✅ File ready: ${file.name} (${formatFileSize(file.size)})</div>`;
+                log(`File selected: ${file.name} (${formatFileSize(file.size)})`);
+            } else {
+                uploadBtn.disabled = true;
+                statusDiv.innerHTML = '<div class="info">Select HEX or BIN file to begin programming</div>';
+            }
+        });
+    } else {
+        console.error('File input element not found!');
+    }
+    
+    // Initialize the rest of the system
+    log('EEPROM Programmer initialized', 'success');
+    updateSystemInfo();
+    setInterval(updateSystemInfo, 10000);
+    setInterval(pollI2CLog, 2000);
+});
+    </script>
