@@ -69,9 +69,9 @@ const char MAIN_PAGE[] = R"rawliteral(
             <h3>System Information</h3>
             <div class="info-grid">
                 <div class="info-item"><span>WiFi Mode:</span><span id="wifiMode">AP</span></div>
-                <div class="info-item"><span>IP Address:</span><span id="ipAddress">192.168.4.1</span></div>
                 <div class="info-item"><span>EEPROM Size:</span><span>32KB</span></div>
                 <div class="info-item"><span>Free Memory:</span><span id="freeMemory">Loading...</span></div>
+                <div class="info-item"><span>DSP Status:</span><span id="dspSystemStatus">Unknown</span></div>
             </div>
         </div>
 
@@ -92,17 +92,38 @@ const char MAIN_PAGE[] = R"rawliteral(
                 <div id="eepromStatus" class="status info"><span class="connection-status disconnected"></span> EEPROM not detected</div>
             </div>
 
-            <div class="card">
-                <h2>DSP Control</h2>
-                <div class="control-group">
-                    <button class="btn btn-success" onclick="setDspRun(true)">Run</button>
-                    <button class="btn btn-danger" onclick="setDspRun(false)">Stop</button>
-                    <button class="btn" onclick="doI2CScan()">I2C Scan</button>
-                    <button class="btn" onclick="openTestWriteDialog()">Test Write</button>
-                </div>
-                <div class="status info">Control ADAU1701 DSP run state</div>
-            </div>
+  <!-- REPLACE the existing DSP Control card with this enhanced version -->
+<div class="card">
+    <h2>DSP Control (ADAU1701)</h2>
+    
+    <!-- Status Indicators -->
+    <div class="status-group">
+        <div class="status" id="dspCoreStatus">
+            <span class="connection-status disconnected"></span> Core: Unknown
         </div>
+        <div class="status" id="dspClockStatus">
+            <span class="connection-status disconnected"></span> Clock: Unknown
+        </div>
+        <div class="status" id="dspPLLStatus">
+            <span class="connection-status disconnected"></span> PLL: Unknown
+        </div>
+    </div>
+
+    <!-- Core Control Buttons -->
+    <div class="control-group">
+        <button class="btn btn-success" onclick="dspCoreRun(true)">Core Run</button>
+        <button class="btn btn-danger" onclick="dspCoreRun(false)">Core Stop</button>
+        <button class="btn btn-warning" onclick="dspSoftReset()">Soft Reset</button>
+        <button class="btn" onclick="dspSelfBoot()">Self Boot</button>
+    </div>
+
+    <!-- Debug & Monitoring -->
+    <div class="control-group">
+        <button class="btn" id="i2cDebugBtn" onclick="dspToggleI2CDebug()">I2C Debug: OFF</button>
+        <button class="btn" onclick="readDSPStatus()">Refresh Status</button>
+        <button class="btn" onclick="dspReadRegisters()">Read Registers</button>
+    </div>
+</div>
 
         <div class="card">
             <h2>File Upload & Programming</h2>
@@ -164,6 +185,188 @@ const char MAIN_PAGE[] = R"rawliteral(
     </div>
 
 <script>
+// ===== ENHANCED DSP CONTROL FUNCTIONS =====
+
+// DSP Core Run/Stop Control
+async function dspCoreRun(run) {
+    try {
+        const res = await fetch('/dsp/core_run', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({run: run})
+        });
+        const data = await res.json();
+        if (data.success) {
+            log(`DSP core ${run ? 'started' : 'stopped'}`, 'success');
+            readDSPStatus(); // Refresh status display
+        } else {
+            log(`DSP control failed: ${data.message}`, 'error');
+        }
+    } catch(e) { 
+        log('DSP control error: ' + e.message, 'error'); 
+    }
+}
+
+// DSP Soft Reset (Core Register Method)
+async function dspSoftReset() {
+    if (!confirm('Soft reset DSP? This will restart processing.')) return;
+    log('Initiating DSP soft reset...', 'warning');
+    try {
+        const res = await fetch('/dsp/soft_reset', {method: 'POST'});
+        const data = await res.json();
+        if (data.success) {
+            log('DSP soft reset completed', 'success');
+            setTimeout(readDSPStatus, 500); // Refresh after reset
+        }
+    } catch(e) { 
+        log('Reset error: ' + e.message, 'error'); 
+    }
+}
+
+// DSP Self-Boot from EEPROM
+async function dspSelfBoot() {
+    log('Triggering DSP self-boot from EEPROM...', 'info');
+    try {
+        const res = await fetch('/dsp/self_boot', {method: 'POST'});
+        const data = await res.json();
+        if (data.success) {
+            log('Self-boot initiated', 'success');
+            setTimeout(readDSPStatus, 1000); // Allow time for boot
+        }
+    } catch(e) { 
+        log('Self-boot error: ' + e.message, 'error'); 
+    }
+}
+
+// Toggle I2C Debug Mode
+async function dspToggleI2CDebug() {
+    const btn = document.getElementById('i2cDebugBtn');
+    const currentlyEnabled = btn.textContent.includes('ON');
+    const newState = !currentlyEnabled;
+    
+    try {
+        const res = await fetch('/dsp/i2c_debug', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({enabled: newState})
+        });
+        const data = await res.json();
+        if (data.success) {
+            btn.textContent = `I2C Debug: ${newState ? 'ON' : 'OFF'}`;
+            btn.className = newState ? 'btn btn-warning' : 'btn';
+            log(`I2C debug ${newState ? 'enabled' : 'disabled'}`, 'success');
+        }
+    } catch(e) { 
+        log('I2C debug toggle error: ' + e.message, 'error'); 
+    }
+}
+
+// Read DSP Status and Update UI
+async function readDSPStatus() {
+    try {
+        const res = await fetch('/dsp/status');
+        const data = await res.json();
+        
+        if (data.success) {
+            // Update core status
+            const coreElem = document.getElementById('dspCoreStatus');
+            coreElem.innerHTML = `<span class="connection-status ${data.core_running ? 'connected' : 'disconnected'}"></span> Core: ${data.core_running ? 'Running' : 'Stopped'}`;
+            coreElem.className = `status ${data.core_running ? 'success' : 'warning'}`;
+            
+            // Update clock status
+            const clockElem = document.getElementById('dspClockStatus');
+            clockElem.innerHTML = `<span class="connection-status ${data.dck_stable ? 'connected' : 'disconnected'}"></span> Clock: ${data.dck_stable ? 'Stable' : 'Unstable'}`;
+            clockElem.className = `status ${data.dck_stable ? 'success' : 'error'}`;
+            
+            // Update PLL status
+            const pllElem = document.getElementById('dspPLLStatus');
+            pllElem.innerHTML = `<span class="connection-status ${data.pll_locked ? 'connected' : 'disconnected'}"></span> PLL: ${data.pll_locked ? 'Locked' : 'Unlocked'}`;
+            pllElem.className = `status ${data.pll_locked ? 'success' : 'warning'}`;
+            
+        } else {
+            log('DSP status read failed', 'error');
+        }
+    } catch(e) { 
+        console.error('Status read error:', e);
+    }
+}
+
+async function runDSPDiagnostic() {
+    log('Running comprehensive DSP diagnostic...', 'info');
+    try {
+        const res = await fetch('/dsp/diagnostic');
+        const data = await res.json();
+        
+        log(`=== DSP DIAGNOSTIC RESULTS ===`, 'info');
+        log(`Basic I2C Detection: ${data.basic_detection ? '✅ SUCCESS' : '❌ FAILED'} (result code: ${data.detect_result})`, 
+            data.basic_detection ? 'success' : 'error');
+        
+        if (data.hardware_id !== undefined) {
+            log(`Hardware ID: 0x${data.hardware_id.toString(16).padStart(2, '0')} ${data.hardware_valid ? '✅ (VALID ADAU1701)' : '❌ (INVALID - expected 0x02)'}`, 
+                data.hardware_valid ? 'success' : 'error');
+        }
+        
+        if (data.write_test !== undefined) {
+            log(`Register Write Test: ${data.write_test ? '✅ SUCCESS' : '❌ FAILED'} (result: ${data.write_result})`, 
+                data.write_test ? 'success' : 'error');
+        }
+        
+        if (data.control_readback !== undefined) {
+            log(`Control Register Readback: 0x${data.control_readback.toString(16).padStart(2, '0')}`, 'info');
+        }
+        
+        log(`Free Heap: ${data.free_heap_start} → ${data.free_heap_end} bytes`, 'info');
+        
+        if (data.success) {
+            log('✅ DSP communication fully functional', 'success');
+        } else {
+            log('❌ DSP communication issues detected', 'error');
+            
+            // Provide troubleshooting tips based on results
+            if (data.basic_detection && !data.hardware_valid) {
+                log('💡 TROUBLESHOOTING: DSP responds but returns wrong hardware ID. Check:', 'warning');
+                log('   - I2C address configuration (should be 0x34 for 7-bit)', 'warning');
+                log('   - DSP power supply (3.3V stable)', 'warning');
+                log('   - DSP reset line (should be HIGH for operation)', 'warning');
+            }
+        }
+        
+    } catch(e) {
+        log('❌ DSP diagnostic error: ' + e.message, 'error');
+    }
+}
+
+// Read DSP Registers for Debugging
+async function dspReadRegisters() {
+    log('Reading DSP registers...', 'info');
+    try {
+        const res = await fetch('/dsp/registers');
+        const data = await res.json();
+        if (data.success) {
+            log('DSP registers read successfully', 'success');
+            // Display register data in log
+            if (data.registers) {
+                Object.keys(data.registers).forEach(reg => {
+                    log(`REG ${reg}: 0x${data.registers[reg].toString(16).padStart(2, '0')}`, 'info');
+                });
+            }
+        }
+    } catch(e) { 
+        log('Register read error: ' + e.message, 'error'); 
+    }
+}
+
+// Update DSP status every 3 seconds when page is active
+let dspStatusInterval;
+function startDSPStatusPolling() {
+    dspStatusInterval = setInterval(readDSPStatus, 3000);
+}
+
+function stopDSPStatusPolling() {
+    if (dspStatusInterval) {
+        clearInterval(dspStatusInterval);
+    }
+}
 let uploadInProgress=false,progressInterval=null;
 
 function log(m,t='info'){
@@ -498,29 +701,42 @@ async function readEEPROMRange(start, length) {
 }
 async function updateDSPStatus() {
   try {
-    const response = await fetch('/dsp_status');
+    const statusElem = document.getElementById('dspStatus');
+    if (!statusElem) {
+      console.error('DSP status element not found');
+      return;
+    }
+    
+    const response = await fetch('/dsp/status');
+    if (!response.ok) {
+      statusElem.innerHTML = '<div class="status error">Status: HTTP Error</div>';
+      return;
+    }
+    
     const data = await response.json();
     
     if (data.success) {
-      document.getElementById('dspStatus').innerHTML = `
+      statusElem.innerHTML = `
         <div class="status success">
-          DSP Running: ${data.core_running ? 'YES' : 'NO'} | 
-          Clock Stable: ${data.dck_stable ? 'YES' : 'NO'} |
-          PLL Locked: ${data.pll_locked ? 'YES' : 'NO'}
+          DSP: ${data.core_running ? 'RUNNING' : 'STOPPED'} | 
+          Clock: ${data.dck_stable ? 'STABLE' : 'UNSTABLE'} |
+          PLL: ${data.pll_locked ? 'LOCKED' : 'UNLOCKED'}
         </div>
       `;
     } else {
-      document.getElementById('dspStatus').innerHTML = `
-        <div class="status error">DSP Not Responding</div>
-      `;
+      statusElem.innerHTML = '<div class="status error">DSP: Not Responding</div>';
     }
   } catch (e) {
     console.error('Status update failed:', e);
+    const statusElem = document.getElementById('dspStatus');
+    if (statusElem) {
+      statusElem.innerHTML = '<div class="status error">Status: Update Failed</div>';
+    }
   }
 }
 
 // Update every 2 seconds
-setInterval(updateDSPStatus, 2000);
+setInterval(updateDSPStatus, 5000);
 
 async function stressTest(){
     if(!confirm('Run I2C stress test?'))return;log('Stress test...','warning');
@@ -545,9 +761,30 @@ function readFileAsArrayBuffer(f){
     return new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.onerror=e=>rej(new Error('File read fail'));r.readAsArrayBuffer(f);});
 }
 
+// Test basic DSP communication without polling
+function quickTest() {
+    fetch('/dsp/diagnostic')
+        .then(r => r.json())
+        .then(data => console.log('Quick test:', data));
+}
+
+// Find correct DSP address
+function findDSP() {
+    fetch('/dsp/find')
+        .then(r => r.json())
+        .then(data => console.log('Address scan:', data));
+}
+
+
+// ADD to existing DOMContentLoaded function:
 document.addEventListener('DOMContentLoaded',function(){
     console.log('DOM loaded');initializeFileInput();updateSystemInfo();
-    setInterval(updateSystemInfo,10000);setInterval(pollI2CLog,2000);log('System ready','success');switchTab('activity');
+    setInterval(updateSystemInfo,30000);setInterval(pollI2CLog,10000);
+    
+    // START DSP STATUS POLLING - ADD THIS LINE
+    startDSPStatusPolling();
+    
+    log('System ready','success');switchTab('activity');
 });
 
 window.addEventListener('error',function(e){console.error('Global err:',e.error);});

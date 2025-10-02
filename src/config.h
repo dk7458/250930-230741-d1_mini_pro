@@ -33,8 +33,9 @@ constexpr uint8_t EEPROM_MAX_VERIFICATION_ERRORS_LOG = 3;      // Only log first
 #define DSP_RUN_BIT_MASK 0x01
 
 // Memory Limits for ESP8266
-#define MAX_HEAP_REQUIRED 4096   // Reserve 4KB for system stability
-#define CONFIG_BUFFER_SIZE 512   // Buffer size for streaming
+#define MAX_HEAP_REQUIRED 2048  // Reserve 4KB for system stability
+#define CONFIG_BUFFER_SIZE 256   // Buffer size for streaming
+#define MIN_SAFE_HEAP 1500       // Critical threshold
 
 // WiFi Mode Configuration
 #define WIFI_MODE_STA 1          // 1 for Station mode, 0 for AP mode
