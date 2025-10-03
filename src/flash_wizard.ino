@@ -5,6 +5,7 @@
 #include "config.h"
 #include "html/index.html.h"  // Single-page HTML interface
 #include "eeprom_manager.h"
+#include "dsp_helper.h"
 #include "hex_parser.h"
 #include "web_routes.h"
 
@@ -19,6 +20,7 @@ void setup() {
   
   // Initialize I2C and EEPROM systems
   eeprom_begin();
+  dsp_init();
   hex_begin();
 
   Serial.println("\n=== EEPROM Programmer Starting ===");

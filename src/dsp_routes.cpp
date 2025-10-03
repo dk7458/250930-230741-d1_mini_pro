@@ -1,4 +1,5 @@
 #include "dsp_routes.h"
+#include "dsp_helper.h"
 #include "config.h"
 #include <ArduinoJson.h>
 #include <WebServer.h>
@@ -35,7 +36,7 @@ void handleDSPRun() {
   }
 
   bool run = req["run"];
-  bool ok = setDSPRunState(run);
+  bool ok = dsp_setRunState(run);
 
   doc["success"] = ok;
   doc["run"] = run;
@@ -67,38 +68,18 @@ void handleDSPCoreRun() {
   bool run = req["run"];
   uint8_t value = run ? 0x00 : 0x01; // 0=running, 1=stopped/reset
 
-  // Enhanced write with verification
-  bool write_success = false;
+  // Enhanced write with verification using DSP helper
+  bool write_success = dsp_writeRegisterVerified(ADAU1701_REG_CONTROL, value);
   bool verify_success = false;
+  uint8_t readback_value = 0xFF;
 
-  for (int attempt = 0; attempt < 2; attempt++) {
-    // Write to control register
-    Wire.beginTransmission(DSP_I2C_ADDRESS);
-    Wire.write(0xF0); Wire.write(0x00); // Control register 0xF000
-    Wire.write(value);
-    int result = Wire.endTransmission();
-
-    if (result == 0) {
-      write_success = true;
-      delay(10); // Allow DSP to process
-
-      // Verify write
-      Wire.beginTransmission(DSP_I2C_ADDRESS);
-      Wire.write(0xF0); Wire.write(0x00);
-      if (Wire.endTransmission(false) == 0) {
-        if (Wire.requestFrom((uint8_t)DSP_I2C_ADDRESS, (uint8_t)1) == 1) {
-          uint8_t readback = Wire.read();
-          verify_success = (readback == value);
-          doc["readback_value"] = readback;
-        }
-      }
-
-      if (verify_success) break;
-    }
-
-    delay(5); // Retry delay
-    yield();
+  if (write_success) {
+    delay(10); // Allow DSP to process
+    verify_success = dsp_readRegister(ADAU1701_REG_CONTROL, readback_value);
+    verify_success = verify_success && (readback_value == value);
   }
+
+  doc["readback_value"] = readback_value;
 
   doc["success"] = write_success && verify_success;
   doc["run"] = run;
@@ -118,26 +99,8 @@ void handleDSPSoftReset() {
 
   JsonDocument doc;
 
-  // Soft reset sequence: write 1 then 0 to core control register bit 0
-  bool success = false;
-
-  // First, stop the core
-  Wire.beginTransmission(DSP_I2C_ADDRESS);
-  Wire.write(0xF0); Wire.write(0x00); // Control register 0xF000
-  Wire.write(0x01); // Set reset bit
-  int result1 = Wire.endTransmission();
-
-  if (result1 == 0) {
-    delay(10); // Short delay for reset to take effect
-
-    // Then clear reset bit to restart
-    Wire.beginTransmission(DSP_I2C_ADDRESS);
-    Wire.write(0xF0); Wire.write(0x00); // Control register 0xF000
-    Wire.write(0x00); // Clear reset bit
-    int result2 = Wire.endTransmission();
-
-    success = (result2 == 0);
-  }
+  // Soft reset sequence using DSP helper
+  bool success = dsp_softReset();
 
   doc["success"] = success;
   doc["message"] = success ? "DSP soft reset completed" : "Soft reset failed";
@@ -150,29 +113,8 @@ void handleDSPSelfBoot() {
 
   JsonDocument doc;
 
-  // Self-boot sequence: ensure WP is high, then trigger reset
-  setWriteProtect(true); // Ensure WP is high for self-boot
-
-  // Use soft reset to trigger self-boot from EEPROM
-  Wire.beginTransmission(DSP_I2C_ADDRESS);
-  Wire.write(0xF0); Wire.write(0x00); // Control register 0xF000
-  Wire.write(0x01); // Set reset bit
-  int result1 = Wire.endTransmission();
-
-  if (result1 == 0) {
-    delay(50); // Allow time for boot process
-
-    Wire.beginTransmission(DSP_I2C_ADDRESS);
-    Wire.write(0xF0); Wire.write(0x00); // Control register 0xF000
-    Wire.write(0x00); // Clear reset bit
-    int result2 = Wire.endTransmission();
-
-    doc["success"] = (result2 == 0);
-    doc["message"] = (result2 == 0) ? "Self-boot initiated" : "Self-boot failed";
-  } else {
-    doc["success"] = false;
-    doc["message"] = "Failed to trigger self-boot";
-  }
+  // Self-boot sequence using DSP helper
+  bool success = dsp_selfBoot();
 
   sendJson(200, doc);
 }
@@ -215,45 +157,21 @@ void handleDSPStatus() {
 
   JsonDocument doc;
 
-  // Read core status register (0xF001)
-  Wire.beginTransmission(DSP_I2C_ADDRESS);
-  Wire.write(0xF0); Wire.write(0x01); // Status register 0xF001
-  Wire.endTransmission(false);
-  Wire.requestFrom((uint8_t)DSP_I2C_ADDRESS, (uint8_t)1);
+  // Get comprehensive status using DSP helper
+  DSPStatus status = dsp_getStatus();
 
-  if (Wire.available()) {
-    uint8_t status = Wire.read();
-    doc["success"] = true;
-    doc["dck_stable"] = (bool)(status & 0x01);     // Bit 0: DCK stable
-    doc["sigmadsp_reset"] = (bool)(status & 0x02); // Bit 1: SigmaDSP reset
-    doc["pll_locked"] = (bool)(status & 0x04);     // Bit 2: PLL locked
-    doc["safeload_ready"] = (bool)(status & 0x08); // Bit 3: Safeload ready
-
-    // Read core control register to get run state (0xF000)
-    Wire.beginTransmission(DSP_I2C_ADDRESS);
-    Wire.write(0xF0); Wire.write(0x00); // Control register 0xF000
-    Wire.endTransmission(false);
-    Wire.requestFrom((uint8_t)DSP_I2C_ADDRESS, (uint8_t)1);
-
-    if (Wire.available()) {
-      uint8_t control = Wire.read();
-      doc["core_running"] = (bool)!(control & 0x01); // Inverted: 0=running, 1=reset
-    }
-
-    // Read hardware ID (0xF002) to verify communication
-    Wire.beginTransmission(DSP_I2C_ADDRESS);
-    Wire.write(0xF0); Wire.write(0x02); // Hardware ID register 0xF002
-    Wire.endTransmission(false);
-    Wire.requestFrom((uint8_t)DSP_I2C_ADDRESS, (uint8_t)1);
-
-    if (Wire.available()) {
-      uint8_t hw_id = Wire.read();
-      doc["hardware_id"] = hw_id;
-      doc["hardware_valid"] = (hw_id == 0x02); // ADAU1701 should return 0x02
-    }
-
+  doc["success"] = status.detected;
+  if (status.detected) {
+    doc["dck_stable"] = status.dckStable;
+    doc["pll_locked"] = status.pllLocked;
+    doc["safeload_ready"] = status.safeloadReady;
+    doc["core_running"] = status.coreRunning;
+    doc["hardware_id"] = status.hardwareId;
+    doc["hardware_valid"] = (status.hardwareId == 0x02);
+    doc["software_id"] = status.softwareId;
+    doc["control_register"] = status.controlReg;
+    doc["status_register"] = status.statusReg;
   } else {
-    doc["success"] = false;
     doc["message"] = "DSP not responding";
   }
 
@@ -267,67 +185,34 @@ void handleDSPDiagnostic() {
   doc["i2c_address"] = DSP_I2C_ADDRESS;
   doc["free_heap_start"] = ESP.getFreeHeap();
 
-  // Test 1: Basic I2C communication
-  Wire.beginTransmission(DSP_I2C_ADDRESS);
-  int detectResult = Wire.endTransmission();
-  doc["basic_detection"] = (detectResult == 0);
-  doc["detect_result"] = detectResult;
+  // Test 1: Basic I2C communication using DSP helper
+  bool detected = dsp_detect();
+  doc["basic_detection"] = detected;
 
-  if (detectResult != 0) {
+  if (!detected) {
     doc["success"] = false;
     doc["message"] = "DSP not responding to basic I2C detection";
+    doc["free_heap_end"] = ESP.getFreeHeap();
     sendJson(200, doc);
     return;
   }
 
-  // Test 2: Read hardware ID with retry
-  uint8_t hw_id = 0xFF;
-  bool hw_id_valid = false;
+  // Test 2: Read hardware ID using DSP helper
+  DSPStatus status = dsp_getStatus();
+  doc["hardware_id"] = status.hardwareId;
+  doc["hardware_valid"] = (status.hardwareId == 0x02);
 
-  for (int attempt = 0; attempt < 3; attempt++) {
-    Wire.beginTransmission(DSP_I2C_ADDRESS);
-    Wire.write(0xF0); Wire.write(0x02); // Hardware ID register
-    if (Wire.endTransmission(false) == 0) {
-      if (Wire.requestFrom((uint8_t)DSP_I2C_ADDRESS, (uint8_t)1) == 1) {
-        hw_id = Wire.read();
-        hw_id_valid = (hw_id == 0x02);
-        if (hw_id_valid) break;
-      }
-    }
-    delay(5); // Short delay between attempts
-    yield();
-  }
+  // Test 3: Test communication using DSP helper
+  bool comm_test = dsp_testCommunication();
+  doc["write_test"] = comm_test;
 
-  doc["hardware_id"] = hw_id;
-  doc["hardware_valid"] = hw_id_valid;
+  // Test 4: Get control register value
+  doc["control_readback"] = status.controlReg;
 
-  // Test 3: Try to write to control register
-  bool write_success = false;
-  Wire.beginTransmission(DSP_I2C_ADDRESS);
-  Wire.write(0xF0); Wire.write(0x00); // Control register
-  Wire.write(0x00); // Try to set running state
-  int writeResult = Wire.endTransmission();
-  doc["write_test"] = (writeResult == 0);
-  doc["write_result"] = writeResult;
-
-  // Test 4: Read back control register
-  uint8_t control_read = 0xFF;
-  if (writeResult == 0) {
-    delay(10); // Allow write to complete
-    Wire.beginTransmission(DSP_I2C_ADDRESS);
-    Wire.write(0xF0); Wire.write(0x00);
-    if (Wire.endTransmission(false) == 0) {
-      if (Wire.requestFrom((uint8_t)DSP_I2C_ADDRESS, (uint8_t)1) == 1) {
-        control_read = Wire.read();
-      }
-    }
-  }
-  doc["control_readback"] = control_read;
-
-  doc["success"] = hw_id_valid;
-  doc["message"] = hw_id_valid ?
+  doc["success"] = status.detected && (status.hardwareId == 0x02) && comm_test;
+  doc["message"] = doc["success"] ?
     "DSP communication established" :
-    "DSP detected but invalid hardware ID";
+    "DSP detected but communication issues";
   doc["free_heap_end"] = ESP.getFreeHeap();
 
   sendJson(200, doc);

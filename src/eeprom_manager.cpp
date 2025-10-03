@@ -1,5 +1,6 @@
 #include <Wire.h>
 #include "eeprom_manager.h"
+#include "dsp_helper.h"
 #include "config.h"
 #include <Arduino.h>
 
@@ -351,7 +352,7 @@ uint8_t readFromEEPROM(uint16_t address) {
   Wire.write((uint8_t)(address & 0xFF));
   Wire.endTransmission();
   
-  Wire.requestFrom(EEPROM_I2C_ADDRESS, (uint8_t)1);
+  Wire.requestFrom(EEPROM_I2C_ADDRESS, 1);
   if (Wire.available()) {
     return Wire.read();
   }
@@ -370,36 +371,8 @@ void setWriteProtect(bool enable) {
   i2c_log_add(msg);
 }
 
-bool setDSPRunState(bool run) {
-  uint8_t value = run ? DSP_RUN_BIT_MASK : 0x00;
-  
-  Serial.printf("Setting DSP run state: %s\n", run ? "RUN" : "STOP");
-  
-  Wire.beginTransmission(DSP_I2C_ADDRESS);
-  Wire.write((uint8_t)DSP_CONTROL_REGISTER);
-  Wire.write(value);
-  int result = Wire.endTransmission();
-  
-  if (result == 0) {
-    i2c_log_add("DSP control: SUCCESS");
-    return true;
-  }
-  
-  // Try fallback address if primary fails
-  uint8_t fallback_addr = 0x1D;
-  Serial.printf("Primary DSP write failed, trying 0x%02X\n", fallback_addr);
-  
-  Wire.beginTransmission(fallback_addr);
-  Wire.write((uint8_t)DSP_CONTROL_REGISTER);
-  Wire.write(value);
-  result = Wire.endTransmission();
-  
-  char msg[64];
-  snprintf(msg, sizeof(msg), "DSP control: %s", result == 0 ? "SUCCESS (fallback)" : "FAILED");
-  i2c_log_add(msg);
-  
-  return (result == 0);
-}
+// DSP Control Functions
+// Moved to dsp_helper.cpp for better organization
 
 // Progress Tracking Functions
 uint32_t getBytesWrittenProgress() { 
@@ -434,64 +407,5 @@ bool getVerificationEnabled() {
   return g_verify_after_write; 
 }
 
-// Legacy function - kept for compatibility
-void resetDSP() {
-  // Simple reset sequence
-  setDSPRunState(false);
-  delay(100);
-  setDSPRunState(true);
-}
-void readADAU1701Status() {
-  Serial.println("\n=== ADAU1701 Status ===");
-  
-  // 1. Read Hardware ID (should be 0x02)
-  Wire.beginTransmission(DSP_I2C_ADDRESS);
-  Wire.write(0xF0);  // High byte
-  Wire.write(0x02);  // Low byte (register 0xF002)
-  Wire.endTransmission(false); // Restart
-  Wire.requestFrom(DSP_I2C_ADDRESS, (uint8_t)1);
-  if (Wire.available()) {
-    uint8_t hwId = Wire.read();
-    Serial.printf("Hardware ID: 0x%02X %s\n", hwId, hwId == 0x02 ? "(ADAU1701)" : "(UNKNOWN)");
-  }
-  
-  // 2. Read Core Status Register (0xF001)
-  Wire.beginTransmission(DSP_I2C_ADDRESS);
-  Wire.write(0xF0);  // High byte  
-  Wire.write(0x01);  // Low byte (register 0xF001)
-  Wire.endTransmission(false);
-  Wire.requestFrom(DSP_I2C_ADDRESS, 1);
-  if (Wire.available()) {
-    uint8_t status = Wire.read();
-    Serial.printf("Core Status: 0x%02X\n", status);
-    Serial.printf("  - DCK Stable: %s\n", (status & 0x01) ? "YES" : "NO");
-    Serial.printf("  - SigmaDSP Reset: %s\n", (status & 0x02) ? "ACTIVE" : "INACTIVE");
-    Serial.printf("  - PLL Lock: %s\n", (status & 0x04) ? "LOCKED" : "UNLOCKED");
-    Serial.printf("  - Safeload Ready: %s\n", (status & 0x08) ? "READY" : "BUSY");
-  }
-  
-  // 3. Read current run state from Control Register (0xF000)
-  Wire.beginTransmission(DSP_I2C_ADDRESS);
-  Wire.write(0xF0);  // High byte
-  Wire.write(0x00);  // Low byte (register 0xF000)  
-  Wire.endTransmission(false);
-  Wire.requestFrom(DSP_I2C_ADDRESS, (uint8_t)1);
-  if (Wire.available()) {
-    uint8_t control = Wire.read();
-    Serial.printf("Control Register: 0x%02X\n", control);
-    Serial.printf("  - Core Run State: %s\n", (control & 0x01) ? "RESET/STOPPED" : "RUNNING");
-  }
-  
-  // 4. Read Software ID (0xF003)
-  Wire.beginTransmission(DSP_I2C_ADDRESS);
-  Wire.write(0xF0);  // High byte
-  Wire.write(0x03);  // Low byte (register 0xF003)
-  Wire.endTransmission(false);
-  Wire.requestFrom(DSP_I2C_ADDRESS, (uint8_t)1);
-  if (Wire.available()) {
-    uint8_t swId = Wire.read();
-    Serial.printf("Software ID: 0x%02X\n", swId);
-  }
-  
-  Serial.println("========================\n");
-}
+// Legacy DSP functions - moved to dsp_helper.cpp
+// Kept for backward compatibility but now delegate to DSP helper

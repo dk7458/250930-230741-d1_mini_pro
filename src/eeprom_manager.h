@@ -16,9 +16,6 @@ uint8_t readFromEEPROM(uint16_t address);
 // Write Protection Control
 void setWriteProtect(bool enable);
 
-// DSP Control Functions
-bool setDSPRunState(bool run);
-
 // Progress Tracking
 uint32_t getBytesWrittenProgress();
 uint32_t getBytesToWrite();
@@ -37,7 +34,9 @@ String i2c_scan();
 bool testWriteByte(uint16_t address, uint8_t value);
 // Add to eeprom_manager.h
 bool verifyEEPROMRange(uint16_t startAddr, uint16_t length, uint8_t expectedData[]);
-// Legacy function (kept for compatibility)
-void resetDSP();
+
+// Legacy DSP functions (now in dsp_helper.h for better organization)
+// void setDSPRunState(bool run);  // Moved to dsp_helper.h
+// void resetDSP();                // Moved to dsp_helper.h
 
 #endif
