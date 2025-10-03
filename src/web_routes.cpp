@@ -4,11 +4,11 @@
 #include "hex_parser.h"
 #include "index.html.h"
 #include <ArduinoJson.h>
-#include <ESP8266WebServer.h>
+#include <WebServer.h>
 #include <Wire.h>
 
 // Global server reference
-static ESP8266WebServer *g_server = nullptr;
+static WebServer *g_server = nullptr;
 
 // Upload state
 static bool g_is_binary_upload = false;
@@ -463,7 +463,7 @@ void handleDSPCoreRun() {
       Wire.beginTransmission(DSP_I2C_ADDRESS);
       Wire.write(0xF0); Wire.write(0x00);
       if (Wire.endTransmission(false) == 0) {
-        if (Wire.requestFrom(DSP_I2C_ADDRESS, 1) == 1) {
+        if (Wire.requestFrom(DSP_I2C_ADDRESS, (uint8_t)1) == 1) {
           uint8_t readback = Wire.read();
           verify_success = (readback == value);
           doc["readback_value"] = readback;
@@ -661,7 +661,8 @@ void handleDSPResetTest() {
       Wire.beginTransmission(possible_addresses[i]);
       Wire.write(0xF0); Wire.write(0x02);
       if (Wire.endTransmission(false) == 0) {
-        if (Wire.requestFrom(possible_addresses[i], 1) == 1) {
+        // Use explicitly sized parameter to avoid ambiguity
+        if (Wire.requestFrom(possible_addresses[i], (uint8_t)1) == 1) {
           uint8_t hw_id = Wire.read();
           if (hw_id == 0x02) {
             found = true;
@@ -712,7 +713,7 @@ void handleDSPRegisters() {
     int txResult = Wire.endTransmission(false);
     
     if (txResult == 0) {
-      uint8_t bytesRead = Wire.requestFrom(DSP_I2C_ADDRESS, 1);
+      uint8_t bytesRead = Wire.requestFrom(DSP_I2C_ADDRESS, (uint8_t)1);
       if (bytesRead == 1 && Wire.available()) {
         regValue = Wire.read();
         anySuccess = true;
@@ -1045,7 +1046,7 @@ void handleUploadComplete() {
   g_expected_total_bytes = 0;
 }
 
-void register_web_routes(ESP8266WebServer &server) {
+void register_web_routes(WebServer &server) {
   g_server = &server;
 
   // Main page

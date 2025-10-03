@@ -1,5 +1,5 @@
-#include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
+#include <WiFi.h>
+#include <WebServer.h>
 #include <Wire.h>
 #include <ArduinoJson.h>
 #include "config.h"
@@ -12,7 +12,7 @@
 const char* ap_ssid = "EEPROM_Programmer";
 const char* ap_password = "dupa1234";
 
-ESP8266WebServer server(80);
+WebServer server(80);
 
 void setup() {
   Serial.begin(115200);
@@ -25,7 +25,7 @@ void setup() {
   Serial.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
 
   // WiFi Configuration
-#if WIFI_MODE_STA
+#if WIFI_MODE_STA_ENABLED
   // Station mode: connect to local WiFi
   Serial.println("WiFi Mode: STA (Station)");
   WiFi.mode(WIFI_STA);
@@ -96,5 +96,6 @@ void loop() {
   }
   
   // Small delay to prevent watchdog issues
-  delay(2);
+  // ESP32 needs a larger delay to prevent watchdog resets
+  delay(10);
 }

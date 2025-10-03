@@ -351,7 +351,7 @@ uint8_t readFromEEPROM(uint16_t address) {
   Wire.write((uint8_t)(address & 0xFF));
   Wire.endTransmission();
   
-  Wire.requestFrom(EEPROM_I2C_ADDRESS, 1);
+  Wire.requestFrom(EEPROM_I2C_ADDRESS, (uint8_t)1);
   if (Wire.available()) {
     return Wire.read();
   }
@@ -449,7 +449,7 @@ void readADAU1701Status() {
   Wire.write(0xF0);  // High byte
   Wire.write(0x02);  // Low byte (register 0xF002)
   Wire.endTransmission(false); // Restart
-  Wire.requestFrom(DSP_I2C_ADDRESS, 1);
+  Wire.requestFrom(DSP_I2C_ADDRESS, (uint8_t)1);
   if (Wire.available()) {
     uint8_t hwId = Wire.read();
     Serial.printf("Hardware ID: 0x%02X %s\n", hwId, hwId == 0x02 ? "(ADAU1701)" : "(UNKNOWN)");
@@ -475,7 +475,7 @@ void readADAU1701Status() {
   Wire.write(0xF0);  // High byte
   Wire.write(0x00);  // Low byte (register 0xF000)  
   Wire.endTransmission(false);
-  Wire.requestFrom(DSP_I2C_ADDRESS, 1);
+  Wire.requestFrom(DSP_I2C_ADDRESS, (uint8_t)1);
   if (Wire.available()) {
     uint8_t control = Wire.read();
     Serial.printf("Control Register: 0x%02X\n", control);
@@ -487,7 +487,7 @@ void readADAU1701Status() {
   Wire.write(0xF0);  // High byte
   Wire.write(0x03);  // Low byte (register 0xF003)
   Wire.endTransmission(false);
-  Wire.requestFrom(DSP_I2C_ADDRESS, 1);
+  Wire.requestFrom(DSP_I2C_ADDRESS, (uint8_t)1);
   if (Wire.available()) {
     uint8_t swId = Wire.read();
     Serial.printf("Software ID: 0x%02X\n", swId);
