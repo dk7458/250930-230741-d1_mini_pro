@@ -3,7 +3,7 @@
 #include <Wire.h>
 #include <ArduinoJson.h>
 #include "config.h"
-#include "index.html.h"  // Single-page HTML interface
+#include "html/index.html.h"  // Single-page HTML interface
 #include "eeprom_manager.h"
 #include "hex_parser.h"
 #include "web_routes.h"
